@@ -1,0 +1,156 @@
+library(stats)
+#library(plyr)
+library(ggplot2)
+library(ggthemes)
+library(dplyr)
+library(mixtools)
+library(readr)
+
+
+#data_dir <- choose.dir()
+
+#dir.create('Results')
+
+#setwd('F:\tracking')
+
+# merge the data of all .csv files under the same folder##
+
+a = list.files("track_input")#
+dir = paste("./track_input/",a,sep="")
+n = length(dir)# read the number of files
+merge.data = read.csv(file = dir[1],header=T,sep=",")
+#
+CellID <-1 #create a CellID for each .CSV data#
+merge.data <- mutate(merge.data,CellID)
+
+for (i in 2:n){CellID <-i
+  new.data <- read.csv(file = dir[i], header=T, sep=",")
+  new.data <- mutate(new.data, CellID)
+  merge.data <-rbind(merge.data,new.data)}#
+#write.csv(merge.data,file = "./H2B tracks demo/merge.csv",row.names=F) 
+#save(merge.data, file = "MS2_PP7.RData")
+#load(file = "All_merge_data.RData")
+my_data <- merge.data
+pixel_size = 1 #um
+frame_time = 0.5 #s
+my_data$POSITION_X=my_data$POSITION_X*pixel_size
+my_data$POSITION_Y=my_data$POSITION_Y*pixel_size
+mean_diff <- function(x) {mean((diff(x,lag=1))^2)}
+
+
+
+#___________________________
+#detach("package:plyr", unload=TRUE)
+#______________________________
+
+#num <- group_by(my_data,TrackID) %>% summarise(n = n())
+num <- group_by(my_data, CellID, TrackID) %>% summarise(n = n())
+#mean_diff_x <- group_by(my_data,TrackID) %>% summarise(mean_diff_x = mean_diff(POSITION_X))
+mean_diff_x <- group_by(my_data, CellID, TrackID) %>% summarise(mean_diff_x = mean_diff(POSITION_X))
+#mean_diff_y <- group_by(my_data,TrackID) %>% summarise(mean_diff_y = mean_diff(POSITION_Y))
+mean_diff_y <- group_by(my_data, CellID, TrackID) %>% summarise(mean_diff_y = mean_diff(POSITION_Y))
+
+my_data_merge1 <- merge(mean_diff_x,mean_diff_y)
+my_data_merge2 <- merge(num,my_data_merge1)
+my_data_merge12 <- mutate(my_data_merge2,D=(mean_diff_x+mean_diff_y)/4/frame_time)
+my_data_merge_final <- mutate(my_data_merge12,logD = log10(D))
+#my_data_merge<-merge(my_data,my_data_merge12,by.x="TrackID",by.y="TrackID")
+
+#my_data_merge <- filter(my_data_merge, n>5)
+my_data_merge_final <- filter(my_data_merge_final, logD != -Inf)
+
+
+#load("my_data_merge_final.Rdata")
+
+set.seed(1000)
+out<-normalmixEM(my_data_merge_final$logD, k = 2, epsilon = 1e-10,maxit = 100000)
+
+x1 <- out$x
+
+x <- x1[seq(1,length(x1),1000)]
+fitting_data1 <- dnorm(x, mean = out$mu[1], sd = out$sigma[1])*out$lambda[1]
+fitting_data2 <- dnorm(x, mean = out$mu[2], sd = out$sigma[2])*out$lambda[2]
+
+
+all_fitting_data <- fitting_data1+fitting_data2
+
+fitting_dataframe <-  data.frame(x,fitting_data1,fitting_data2, all_fitting_data)
+
+write.csv(out[c("lambda", "mu", "sigma")], file = "Fitting out.csv", row.names = F, quote = F)
+save(my_data_merge_final, file = "my_data_merge_final.Rdata")
+write.csv(my_data_merge_final, file = "my_data_merge_final.csv")
+
+
+
+
+header <- data.frame(lambda1='lambda1',lambda2='lambda2',
+                     mu1='mu1',mu2='mu2',
+                     sigma1='sigma1',sigma2='sigma2')
+
+write_csv(header, "Multiple Fitting out-2 cons.csv", append= TRUE)
+LogD <- my_data_merge_final$logD
+write.csv(LogD, file = "LogD.csv")
+
+for ( i in c(1:3)) {set.seed(i*2000)
+  index <- unique(floor(runif(LogD,0,length(LogD)+1)))
+  fit_out<-normalmixEM(LogD[index], k = 2, epsilon = 1e-4,maxit = 10000)
+  df <- data.frame(matrix(unlist(fit_out[c("lambda", "mu", "sigma")]),ncol =6))
+  write_csv(df, "Multiple Fitting out-2 cons.csv", append= TRUE)
+  remove(fit_out)}
+
+
+
+
+
+ggplot(fitting_dataframe)+
+  geom_histogram(data=my_data_merge_final,aes(logD,..density..),stat = "bin",position = "identity", binwidth = NULL,    
+                 bins = 50, na.rm = FALSE,show.legend = TRUE,alpha=0.2,fill="grey50",color="grey50")+
+  
+  geom_line(mapping = aes(x,fitting_data1), stat = "identity",size =1,colour = 'blue',
+            position = "identity", lineend = "butt", linejoin = "round",
+            linemitre = 1, arrow = NULL, na.rm = FALSE, show.legend = NA,
+            inherit.aes = TRUE)+
+  geom_line(mapping = aes(x,fitting_data2), stat = "identity",size =1,colour = 'green',
+            position = "identity", lineend = "butt", linejoin = "round",
+            linemitre = 1, arrow = NULL, na.rm = FALSE, show.legend = NA,
+            inherit.aes = TRUE)+
+  geom_line(mapping = aes(x,all_fitting_data), stat = "identity",size =1,colour = 'black',
+            position = "identity", lineend = "butt", linejoin = "round",
+            linemitre = 1, arrow = NULL, na.rm = FALSE, show.legend = NA,alpha = 0.9,
+            inherit.aes = TRUE)+
+  
+  #scale_color_gradientn(colours = c('blue','cyan',
+  #'green','orange','yellow','red','darkred'),
+  #breaks = c(1, 25,50,75,100,125,150))+
+  
+  scale_x_continuous(limits = c(-5,2),breaks =c(-5,-4,-3,-2,-1,0,1,2))+
+  #scale_y_continuous(breaks =c(0,2,4,6,8,10,12,14,16,18,20,22,24,26))+
+  #scale_x_log10(limits=c(10,100000))+facet_wrap(~Tag1)+
+  #guides(fill = guide_colorbar(title ="Track Length"))+
+  theme_bw()+
+  theme(aspect.ratio=0.33)+ 
+  labs(
+    x = "LogD (um^2/s)",
+    y = "Frequencey",
+    colour = "Track Length\n(Frame)",
+    title = NULL)+
+  theme(
+    strip.background = element_rect(fill = "grey90", color = "grey90", size = 1),
+    strip.text = element_text(colour = "grey0",face = "bold",size = 10))+
+  guides(fill = guide_legend())+
+  theme(axis.line = element_line(colour = "grey0", size = 1),
+    axis.text = element_text(color = "grey0", size = 12),
+    axis.text.x = element_text(angle = 0,face = "bold", vjust = 0,hjust = 0.5),
+    axis.text.y = element_text(angle = 0,face = "bold", vjust = 0),
+    axis.title.x = element_text(angle = 0,face = "bold",color = "grey0", size = 15),
+    axis.title.y = element_text(angle = 90,face = "bold",color = "grey0", size = 15))+
+  theme(panel.grid.major.x = element_line(colour = "grey80",size = 0.25),
+    panel.grid.major.y = element_line(colour = "grey80",size = 0.25),
+    panel.grid.minor.x = element_line(colour = "grey90",size = 0.25),
+    panel.grid.minor.y = element_line(colour = "grey90",size = 0.25)
+    #panel.border = element_blank()
+    )+
+  theme(
+    legend.text = element_text(size = 9,face = "bold"),
+    legend.title = element_text(size = 10, face = "bold"))
+#ggsave('Jun and Jun D hist and 2 fit.pdf',height = 10,width = 10)
